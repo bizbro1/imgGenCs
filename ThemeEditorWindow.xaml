@@ -1,0 +1,83 @@
+<Window x:Class="ImagenGenC.ThemeEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Theme Editor" Height="600" Width="500" WindowStartupLocation="CenterOwner">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+        <Grid Margin="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Theme Fields -->
+            <StackPanel Grid.Row="0" Orientation="Vertical" Margin="0,0,0,10">
+                <TextBlock Text="Theme Name" FontWeight="Bold"/>
+                <TextBox x:Name="ThemeNameTextBox" Height="30" Margin="0,5,0,10"/>
+                <TextBlock Text="Save Folder" FontWeight="Bold"/>
+                <Grid Margin="0,5,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="ThemeSaveFolderTextBox" Height="30"/>
+                    <Button Content="Browse..." Grid.Column="1" Width="80" Margin="5,0,0,0" Click="BrowseThemeSaveFolder_Click"/>
+                </Grid>
+                <TextBlock Text="Theme Description" FontWeight="Bold"/>
+                <TextBox x:Name="ThemeDescriptionTextBox" Height="60" Margin="0,5,0,0" TextWrapping="Wrap" AcceptsReturn="True"/>
+            </StackPanel>
+
+            <!-- Subcategories Section -->
+            <GroupBox Grid.Row="1" Header="Subcategories" Margin="0,10,0,10">
+                <StackPanel>
+                    <ItemsControl x:Name="SubcategoriesList">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border BorderBrush="#CCCCCC" BorderThickness="1" Margin="0,0,0,8" Padding="8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding Description}" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding SaveFolder}" Foreground="Gray" FontSize="11"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="Delete" Margin="10,0,0,0" Click="DeleteSubcategory_Click"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <!-- Add New Subcategory -->
+                    <GroupBox Header="Add Subcategory" Margin="0,10,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Name" FontWeight="Bold"/>
+                            <TextBox x:Name="SubcategoryNameTextBox" Height="30" Margin="0,5,0,10"/>
+                            <TextBlock Text="Description" FontWeight="Bold"/>
+                            <TextBox x:Name="SubcategoryDescriptionTextBox" Height="40" Margin="0,5,0,10" TextWrapping="Wrap" AcceptsReturn="True"/>
+                            <TextBlock Text="Save Folder" FontWeight="Bold"/>
+                            <Grid Margin="0,5,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="SubcategorySaveFolderTextBox" Height="30"/>
+                                <Button Content="Browse..." Grid.Column="1" Width="80" Margin="5,0,0,0" Click="BrowseSubcategorySaveFolder_Click"/>
+                            </Grid>
+                            <Button Content="Add Subcategory" Width="140" Click="AddSubcategory_Click"/>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </GroupBox>
+
+            <!-- Save/Cancel Buttons -->
+            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                <Button Content="Save" Width="100" Margin="0,0,10,0" Click="SaveButton_Click"/>
+                <Button Content="Cancel" Width="100" Click="CancelButton_Click"/>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Window> 

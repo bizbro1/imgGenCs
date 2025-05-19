@@ -1,0 +1,4 @@
+# Your OpenAI API Key
+# Replace this with your actual API key from https://platform.openai.com/
+# Example: sk-1234567890abcdef1234567890abcdef1234567890abcdef
+YOUR_API_KEY_HERE 
