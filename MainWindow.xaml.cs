@@ -127,10 +127,8 @@ namespace ImagenGenC
         private ThemeItem? _selectedTheme = null;
         private AnalyticsData _analytics = new AnalyticsData();
         private ThemeSubcategory? _selectedSubcategory = null;
-        private bool _editMode = false;
         private DrawingAttributes _paintAttributes = new DrawingAttributes { Color = Colors.White, Width = 24, Height = 24, IsHighlighter = false, IgnorePressure = true };
         private DrawingAttributes _eraseAttributes = new DrawingAttributes { Color = Colors.Black, Width = 24, Height = 24, IsHighlighter = false, IgnorePressure = true };
-        private bool _maskVisible = true;
 
         public MainWindow()
         {
@@ -169,6 +167,8 @@ namespace ImagenGenC
                     PromptTextBox.Foreground = System.Windows.Media.Brushes.Gray;
                 }
             };
+
+            PromptTextBox.KeyDown += PromptTextBox_KeyDown;
         }
 
         private void LoadThemes()
@@ -432,6 +432,7 @@ namespace ImagenGenC
                 }
 
                 byte[] imageData;
+                string? tempPath = null;
                 if (imagePathOrUrl.StartsWith("http://") || imagePathOrUrl.StartsWith("https://"))
                 {
                     using (var httpClient = new HttpClient())
@@ -444,22 +445,61 @@ namespace ImagenGenC
                     imageData = File.ReadAllBytes(imagePathOrUrl);
                 }
 
-                var image = new BitmapImage();
+                // --- Check and fix image size ---
+                BitmapImage image;
                 using (var ms = new MemoryStream(imageData))
                 {
+                    image = new BitmapImage();
                     image.BeginInit();
                     image.CacheOption = BitmapCacheOption.OnLoad;
                     image.StreamSource = ms;
                     image.EndInit();
                     image.Freeze();
                 }
+                if (image.PixelWidth != 1024 || image.PixelHeight != 1024)
+                {
+                    // Auto-crop or pad to 1024x1024
+                    var drawingVisual = new System.Windows.Media.DrawingVisual();
+                    using (var dc = drawingVisual.RenderOpen())
+                    {
+                        dc.DrawRectangle(System.Windows.Media.Brushes.White, null, new System.Windows.Rect(0, 0, 1024, 1024));
+                        double scale = Math.Min(1024.0 / image.PixelWidth, 1024.0 / image.PixelHeight);
+                        double width = image.PixelWidth * scale;
+                        double height = image.PixelHeight * scale;
+                        double x = (1024 - width) / 2;
+                        double y = (1024 - height) / 2;
+                        dc.DrawImage(image, new System.Windows.Rect(x, y, width, height));
+                    }
+                    var rtb = new RenderTargetBitmap(1024, 1024, 96, 96, PixelFormats.Pbgra32);
+                    rtb.Render(drawingVisual);
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(rtb));
+                    tempPath = Path.Combine(Path.GetTempPath(), $"generated_image_{DateTime.Now.Ticks}.png");
+                    using (var fs = new FileStream(tempPath, FileMode.Create))
+                    {
+                        encoder.Save(fs);
+                    }
+                    imageData = File.ReadAllBytes(tempPath);
+                    image = new BitmapImage();
+                    using (var ms = new MemoryStream(imageData))
+                    {
+                        image.BeginInit();
+                        image.CacheOption = BitmapCacheOption.OnLoad;
+                        image.StreamSource = ms;
+                        image.EndInit();
+                        image.Freeze();
+                    }
+                    _currentImagePath = tempPath;
+                    System.Windows.MessageBox.Show("The generated image was not square and has been automatically fixed to 1024x1024 for editing.", "Notice", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    // Save image temporarily
+                    tempPath = Path.Combine(Path.GetTempPath(), $"generated_image_{DateTime.Now.Ticks}.{format}");
+                    File.WriteAllBytes(tempPath, imageData);
+                    _currentImagePath = tempPath;
+                }
                 GeneratedImage.Source = image;
-
-                // Save image temporarily
-                var tempPath = Path.Combine(Path.GetTempPath(), $"generated_image_{DateTime.Now.Ticks}.{format}");
-                File.WriteAllBytes(tempPath, imageData);
-                _currentImagePath = tempPath;
-                RepromptButton.IsEnabled = true;
 
                 // Auto-save to theme or subcategory folder if set
                 string? saveFolder = null;
@@ -563,7 +603,56 @@ namespace ImagenGenC
             GeneratedImage.Source = null;
             PromptTextBox.Clear();
             _currentImagePath = null;
-            RepromptButton.IsEnabled = false;
+        }
+
+        private void DeleteButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(_currentImagePath))
+            {
+                System.Windows.MessageBox.Show("No image to delete.", "Error", 
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            var result = System.Windows.MessageBox.Show("Are you sure you want to delete this image?", 
+                "Confirm Delete", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            
+            if (result == MessageBoxResult.Yes)
+            {
+                try
+                {
+                    // Remove from history
+                    var historyItem = _promptHistory.FirstOrDefault(x => x.ImagePath == _currentImagePath);
+                    if (historyItem != null)
+                    {
+                        _promptHistory.Remove(historyItem);
+                        SaveHistory();
+                        HistoryListView.ItemsSource = null;
+                        HistoryListView.ItemsSource = _promptHistory;
+                    }
+
+                    // Release the image file lock
+                    GeneratedImage.Source = null;
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+
+                    // Delete the file
+                    if (File.Exists(_currentImagePath))
+                    {
+                        File.Delete(_currentImagePath);
+                    }
+
+                    _currentImagePath = null;
+
+                    System.Windows.MessageBox.Show("Image deleted successfully!", "Success", 
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    System.Windows.MessageBox.Show($"Failed to delete image: {ex.Message}", "Error", 
+                        MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
         }
 
         private void HistoryListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -573,10 +662,18 @@ namespace ImagenGenC
                 // Load the selected image
                 if (File.Exists(selectedItem.ImagePath))
                 {
-                    var image = new BitmapImage(new Uri(selectedItem.ImagePath));
+                    var imageData = File.ReadAllBytes(selectedItem.ImagePath);
+                    var image = new BitmapImage();
+                    using (var ms = new MemoryStream(imageData))
+                    {
+                        image.BeginInit();
+                        image.CacheOption = BitmapCacheOption.OnLoad;
+                        image.StreamSource = ms;
+                        image.EndInit();
+                        image.Freeze();
+                    }
                     GeneratedImage.Source = image;
                     _currentImagePath = selectedItem.ImagePath;
-                    RepromptButton.IsEnabled = true;
                 }
             }
         }
@@ -706,7 +803,16 @@ namespace ImagenGenC
             {
                 if (File.Exists(item.ImagePath))
                 {
-                    var image = new BitmapImage(new Uri(item.ImagePath));
+                    var imageData = File.ReadAllBytes(item.ImagePath);
+                    var image = new BitmapImage();
+                    using (var ms = new MemoryStream(imageData))
+                    {
+                        image.BeginInit();
+                        image.CacheOption = BitmapCacheOption.OnLoad;
+                        image.StreamSource = ms;
+                        image.EndInit();
+                        image.Freeze();
+                    }
                     GeneratedImage.Source = image;
                     _currentImagePath = item.ImagePath;
                 }
@@ -921,183 +1027,6 @@ namespace ImagenGenC
             }
         }
 
-        private async void RepromptButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (!string.IsNullOrEmpty(_currentImagePath) && File.Exists(_currentImagePath))
-            {
-                SetEditMode(true);
-            }
-        }
-
-        private void PaintButton_Click(object sender, RoutedEventArgs e)
-        {
-            MaskCanvas.DefaultDrawingAttributes = _paintAttributes;
-            MaskCanvas.EditingMode = InkCanvasEditingMode.Ink;
-        }
-
-        private void EraseButton_Click(object sender, RoutedEventArgs e)
-        {
-            MaskCanvas.DefaultDrawingAttributes = _eraseAttributes;
-            MaskCanvas.EditingMode = InkCanvasEditingMode.Ink;
-        }
-
-        private void ClearMaskButton_Click(object sender, RoutedEventArgs e)
-        {
-            MaskCanvas.Strokes.Clear();
-        }
-
-        private void ToggleMaskButton_Click(object sender, RoutedEventArgs e)
-        {
-            _maskVisible = !_maskVisible;
-            MaskCanvas.Opacity = _maskVisible ? 0.5 : 0.0;
-        }
-
-        private async void SubmitEditButton_Click(object sender, RoutedEventArgs e)
-        {
-            // Export mask as PNG
-            var rtb = new RenderTargetBitmap((int)MaskCanvas.ActualWidth, (int)MaskCanvas.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-            rtb.Render(MaskCanvas);
-            var encoder = new PngBitmapEncoder();
-            encoder.Frames.Add(BitmapFrame.Create(rtb));
-            var tempMaskPath = Path.Combine(Path.GetTempPath(), $"mask_{DateTime.Now.Ticks}.png");
-            using (var fs = new FileStream(tempMaskPath, FileMode.Create))
-            {
-                encoder.Save(fs);
-            }
-            string editPrompt = EditPromptTextBox.Text.Trim();
-            if (string.IsNullOrWhiteSpace(editPrompt))
-            {
-                System.Windows.MessageBox.Show("Please describe what to change.", "Input Required", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            // Call OpenAI image edit API (reuse logic from RepromptButton_Click, but use tempMaskPath)
-            try
-            {
-                RepromptButton.IsEnabled = false;
-                string? pngPath = _currentImagePath;
-                if (string.IsNullOrEmpty(pngPath) || !File.Exists(pngPath))
-                {
-                    System.Windows.MessageBox.Show("No valid image to edit.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-                var apiKey = LoadApiKey();
-                if (string.IsNullOrEmpty(apiKey))
-                {
-                    System.Windows.MessageBox.Show("OpenAI API key is missing.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
-                }
-                var url = "https://api.openai.com/v1/images/edits";
-                using (var client = new HttpClient())
-                using (var form = new MultipartFormDataContent())
-                {
-                    client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey.Trim());
-                    // Add image file
-                    var imageBytes = File.ReadAllBytes(pngPath);
-                    var imageContent = new ByteArrayContent(imageBytes);
-                    imageContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
-                    form.Add(imageContent, "image", Path.GetFileName(pngPath));
-                    // Add mask file
-                    if (string.IsNullOrEmpty(tempMaskPath) || !File.Exists(tempMaskPath))
-                    {
-                        System.Windows.MessageBox.Show("No valid mask to submit.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        return;
-                    }
-                    var maskBytes = File.ReadAllBytes(tempMaskPath);
-                    var maskContent = new ByteArrayContent(maskBytes);
-                    maskContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
-                    form.Add(maskContent, "mask", Path.GetFileName(tempMaskPath));
-                    // Add prompt
-                    form.Add(new StringContent(editPrompt), "prompt");
-                    form.Add(new StringContent("1"), "n");
-                    form.Add(new StringContent("1024x1024"), "size");
-                    form.Add(new StringContent("b64_json"), "response_format");
-                    var response = await client.PostAsync(url, form);
-                    var responseString = await response.Content.ReadAsStringAsync();
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        System.Windows.MessageBox.Show($"OpenAI API error: {response.StatusCode}\n{responseString}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                        return;
-                    }
-                    using (var doc = System.Text.Json.JsonDocument.Parse(responseString))
-                    {
-                        var root = doc.RootElement;
-                        if (root.TryGetProperty("data", out var dataElem) && dataElem.GetArrayLength() > 0)
-                        {
-                            var first = dataElem[0];
-                            if (first.TryGetProperty("b64_json", out var b64Elem))
-                            {
-                                var base64String = b64Elem.GetString();
-                                if (!string.IsNullOrEmpty(base64String))
-                                {
-                                    var editedImageData = Convert.FromBase64String(base64String);
-                                    var tempPath = Path.Combine(Path.GetTempPath(), $"edited_image_{DateTime.Now.Ticks}.png");
-                                    File.WriteAllBytes(tempPath, editedImageData);
-                                    var image = new BitmapImage();
-                                    using (var ms = new MemoryStream(editedImageData))
-                                    {
-                                        image.BeginInit();
-                                        image.CacheOption = BitmapCacheOption.OnLoad;
-                                        image.StreamSource = ms;
-                                        image.EndInit();
-                                        image.Freeze();
-                                    }
-                                    GeneratedImage.Source = image;
-                                    _currentImagePath = tempPath;
-                                    RepromptButton.IsEnabled = true;
-                                    // Add to history
-                                    _promptHistory.Insert(0, new PromptHistoryItem
-                                    {
-                                        UserPrompt = editPrompt,
-                                        FullPrompt = editPrompt,
-                                        ImagePath = tempPath,
-                                        ThemeName = _selectedTheme?.Name ?? "",
-                                        Created = DateTime.Now
-                                    });
-                                    if (_promptHistory.Count > MaxHistoryItems)
-                                    {
-                                        _promptHistory.RemoveAt(_promptHistory.Count - 1);
-                                    }
-                                    SaveHistory();
-                                    HistoryListView.ItemsSource = null;
-                                    HistoryListView.ItemsSource = _promptHistory;
-                                    System.Windows.MessageBox.Show("Image edited successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
-                                    // Exit edit mode
-                                    SetEditMode(false);
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                    System.Windows.MessageBox.Show("No edited image found in OpenAI response.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Windows.MessageBox.Show($"An error occurred: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-            finally
-            {
-                RepromptButton.IsEnabled = true;
-            }
-        }
-
-        private void CancelEditButton_Click(object sender, RoutedEventArgs e)
-        {
-            SetEditMode(false);
-        }
-
-        private void SetEditMode(bool enabled)
-        {
-            _editMode = enabled;
-            EditControlsPanel.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
-            MaskCanvas.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
-            if (!enabled)
-            {
-                MaskCanvas.Strokes.Clear();
-                EditPromptTextBox.Text = string.Empty;
-            }
-        }
-
         private void GalleryListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (GalleryListView.SelectedItem is PromptHistoryItem selectedItem)
@@ -1105,11 +1034,28 @@ namespace ImagenGenC
                 // Load the selected image into the main image display
                 if (System.IO.File.Exists(selectedItem.ImagePath))
                 {
-                    var image = new BitmapImage(new System.Uri(selectedItem.ImagePath));
+                    var imageData = File.ReadAllBytes(selectedItem.ImagePath);
+                    var image = new BitmapImage();
+                    using (var ms = new MemoryStream(imageData))
+                    {
+                        image.BeginInit();
+                        image.CacheOption = BitmapCacheOption.OnLoad;
+                        image.StreamSource = ms;
+                        image.EndInit();
+                        image.Freeze();
+                    }
                     GeneratedImage.Source = image;
                     _currentImagePath = selectedItem.ImagePath;
-                    RepromptButton.IsEnabled = true;
                 }
+            }
+        }
+
+        private void PromptTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                GenerateButton_Click(GenerateButton, new RoutedEventArgs());
+                e.Handled = true;
             }
         }
     }
